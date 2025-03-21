@@ -1,7 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
-const fetch = require("node-fetch"); // If on Node <18, otherwise use the global fetch
+const fetch = require("node-fetch"); // node-fetch v2
 
 const app = express();
 const PORT = 3000;
@@ -22,47 +22,30 @@ app.post("/api/chat", async (req, res) => {
     }
 
     // Call the locally running Ollama server
-    const response = await fetch("http://localhost:11434", {
+    const response = await fetch("http://localhost:11434/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         prompt: userMessage,
-        model: "llama2"  // or whichever model you want
+        model: "llama3.2:latest",  // Using the latest Llama 3.2 model
+        stream: false     // Disable streaming since we're handling the response differently
       })
     });
 
-    // We need to read the streamed JSON lines from Ollama
-    let finalText = "";
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      // Convert Uint8Array -> string
-      const chunk = decoder.decode(value, { stream: true });
-
-      // Ollama responds in JSON lines, e.g.:
-      // {"response":"...partial text...","model":"llama2"}
-      // We'll parse line by line
-      const lines = chunk.split("\n");
-      for (let line of lines) {
-        line = line.trim();
-        if (!line) continue; // Skip empty lines
-        try {
-          const json = JSON.parse(line);
-          if (json.response) {
-            finalText += json.response;
-          }
-        } catch (err) {
-          // Not a valid JSON line; ignore
-        }
-      }
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error("Ollama API error:", errorData);
+      return res.status(response.status).json({ 
+        error: `Ollama API error (${response.status})`, 
+        details: errorData 
+      });
     }
 
-    // Send the full text back to the client
-    res.json({ text: finalText });
+    // For node-fetch v2, we'll use .json() instead of streaming
+    const data = await response.json();
+    
+    // Send the response text back to the client
+    res.json({ text: data.response || "[No response]" });
   } catch (error) {
     console.error("Error in /api/chat:", error);
     res.status(500).json({ error: "Server error while generating text." });
@@ -71,4 +54,5 @@ app.post("/api/chat", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
+  console.log(`Expecting Ollama to be running at http://localhost:11434`);
 });
